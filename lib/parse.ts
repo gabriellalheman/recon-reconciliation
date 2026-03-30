@@ -16,12 +16,20 @@ export function parseDate(value: unknown, format: string): Date {
   if (value instanceof Date) return value
 
   if (typeof value === 'number') {
+    // Excel serial dates for 2020-2035 are ~43831–47847
+    // Anything over 2,958,465 (Excel max for year 9999) is a Unix timestamp
+    if (value > 2958465) {
+      // Unix timestamp — seconds if < 1e10, milliseconds if >= 1e10
+      const ts = value >= 1e10 ? value : value * 1000
+      const d = new Date(ts)
+      if (!isNaN(d.getTime())) return d
+    }
     const excelEpoch = new Date(Date.UTC(1899, 11, 30))
     return new Date(excelEpoch.getTime() + value * 86400000)
   }
 
   if (typeof value === 'string') {
-    const str = value.trim()
+    const str = value.trim().replace(/^'+/, '')  // strip leading apostrophe(s) from Excel text-forced cells
     if (!str) throw new Error('Empty date value')
     const parsed = dateParse(str, format, new Date())
     if (!isNaN(parsed.getTime())) return parsed
@@ -99,6 +107,9 @@ export function parsePartnerFile(fileBuffer: Buffer, config: PartnerConfig): Par
     try {
       const channel = resolveChannel(row, config)
 
+      // Skip rows that don't match the channel filter (e.g. BRI QRIS only)
+      if (config.channelFilter !== null && channel !== config.channelFilter) continue
+
       // Parse datetime — use date-only when config specifies defaultTime
       let datetime: Date
       if (config.columns.defaultTime) {
@@ -108,8 +119,11 @@ export function parsePartnerFile(fileBuffer: Buffer, config: PartnerConfig): Par
         datetime = parseDate(row[colDatetime], config.dateFormat)
       }
 
-      const reconRef = String(row[colReconRef] ?? '').trim()
-      const reconRef2 = colReconRef2 !== null ? String(row[colReconRef2] ?? '').trim() : ''
+      let reconRef = String(row[colReconRef] ?? '').trim().replace(/^'+/, '')
+      if (config.reconRefPadLength && reconRef.length < config.reconRefPadLength) {
+        reconRef = reconRef.padStart(config.reconRefPadLength, '0')
+      }
+      const reconRef2 = colReconRef2 !== null ? String(row[colReconRef2] ?? '').trim().replace(/^'+/, '') : ''
       const rawAmount = row[colAmount]
       const amount = typeof rawAmount === 'number'
         ? rawAmount
@@ -129,7 +143,10 @@ export function parsePartnerFile(fileBuffer: Buffer, config: PartnerConfig): Par
   }
 
   if (!minDate || !maxDate) {
-    throw new Error('No valid rows found in uploaded file')
+    const hint = errors.length > 0
+      ? `First error on row ${errors[0].row}: ${errors[0].message}`
+      : 'File appears empty or all rows were skipped'
+    throw new Error(`No valid rows found. ${hint}`)
   }
 
   return { rows, errors, minDate, maxDate }

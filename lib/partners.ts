@@ -15,14 +15,20 @@ export interface PartnerConfig {
   }
   typeMapping?: Record<string, string>
   dateFormat: string
+  // Only include rows where the resolved channel matches this value (null = include all)
+  channelFilter: string | null
   // Metabase: which column in qris_transaction to match against recon_ref
   metabaseRefColumn: 'acquirer_reference_no' | 'issuerInfo_rrn'
+  // Metabase: qris.acquirer values to filter by (joined via qris_transaction.qris_id = qris.uuid)
+  acquirerValues: string[]
+  // If set, pad reconRef with leading zeros to this length before matching
+  reconRefPadLength?: number
 }
 
 export const PARTNERS: PartnerConfig[] = [
   {
-    id: 'bri',
-    label: 'BRI — QRIS + Card',
+    id: 'bri-qris',
+    label: 'BRI — QRIS',
     group: 'BRI',
     partner: 'BRI',
     channel: null,
@@ -39,7 +45,10 @@ export const PARTNERS: PartnerConfig[] = [
       '*': 'Card',
     },
     dateFormat: 'yyyy-MM-dd',
+    channelFilter: 'QRIS',
     metabaseRefColumn: 'issuerInfo_rrn',
+    acquirerValues: ['BRI', 'BRI_QRIS'],
+    reconRefPadLength: 12,
   },
   {
     id: 'bnc-qris',
@@ -47,14 +56,16 @@ export const PARTNERS: PartnerConfig[] = [
     group: 'BNC',
     partner: 'BNC',
     channel: 'QRIS',
-    headerRow: 0,
+    headerRow: 0,        // row 1 is the header (0-indexed)
     columns: {
-      recon_ref: 'E',
-      amount: 'K',
-      datetime: 'P',
+      recon_ref: 'G',
+      amount: 'M',
+      datetime: 'U',
     },
     dateFormat: 'dd/MM/yyyy HH:mm:ss',
+    channelFilter: null,
     metabaseRefColumn: 'acquirer_reference_no',
+    acquirerValues: ['BNC'],
   },
 ]
 
