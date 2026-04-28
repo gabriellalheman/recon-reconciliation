@@ -23,6 +23,10 @@ export interface PartnerConfig {
   acquirerValues: string[]
   // If set, pad reconRef with leading zeros to this length before matching
   reconRefPadLength?: number
+  // Column letter for the bank settlement date in the partner file (optional, stored as-is)
+  settlementDateColumn?: string
+  // Column letter for the settled amount from the bank report
+  amountSettleFromBankColumn?: string
 }
 
 export const PARTNERS: PartnerConfig[] = [
@@ -49,6 +53,8 @@ export const PARTNERS: PartnerConfig[] = [
     metabaseRefColumn: 'issuerInfo_rrn',
     acquirerValues: ['BRI', 'BRI_QRIS'],
     reconRefPadLength: 12,
+    settlementDateColumn: 'E',
+    amountSettleFromBankColumn: 'L',
   },
   {
     id: 'bnc-qris',
@@ -66,6 +72,8 @@ export const PARTNERS: PartnerConfig[] = [
     channelFilter: null,
     metabaseRefColumn: 'acquirer_reference_no',
     acquirerValues: ['BNC'],
+    settlementDateColumn: 'R',
+    amountSettleFromBankColumn: 'P',
   },
 ]
 
@@ -80,3 +88,9 @@ export function partnersByGroup(): Record<string, PartnerConfig[]> {
     return acc
   }, {})
 }
+
+// Partners available in the Results view (includes non-upload sources like disbursement)
+export const VIEW_PARTNERS: { label: string; partner: string }[] = [
+  ...PARTNERS.map((p) => ({ label: p.label, partner: p.partner })),
+  { label: 'Mandiri — Disbursement', partner: 'MANDIRI' },
+]

@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Recon Reconciliation",
+  title: "Pivot Reconciliation",
   description: "Partner settlement reconciliation against internal data",
 };
 

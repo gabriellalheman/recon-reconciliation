@@ -68,6 +68,8 @@ export interface ParsedRow {
   datetime: Date        // parsed Date, used for date range detection
   channel: string
   partner: string
+  settlementDateBank: string | null   // raw value from bank settlement date column
+  amountSettleFromBank: number | null // settled amount from the bank report
 }
 
 export interface ParseResult {
@@ -92,6 +94,8 @@ export function parsePartnerFile(fileBuffer: Buffer, config: PartnerConfig): Par
   const colReconRef2 = config.columns.recon_ref_2 ? colToIndex(config.columns.recon_ref_2) : null
   const colAmount = colToIndex(config.columns.amount)
   const colDatetime = colToIndex(config.columns.datetime)
+  const colSettlementDate = config.settlementDateColumn ? colToIndex(config.settlementDateColumn) : null
+  const colAmountSettleFromBank = config.amountSettleFromBankColumn ? colToIndex(config.amountSettleFromBankColumn) : null
 
   const rows: ParsedRow[] = []
   const errors: { row: number; message: string }[] = []
@@ -133,7 +137,30 @@ export function parsePartnerFile(fileBuffer: Buffer, config: PartnerConfig): Par
       if (!minDate || d < minDate) minDate = d
       if (!maxDate || d > maxDate) maxDate = d
 
-      rows.push({ rowNum: sourceRowNum, reconRef, reconRef2, amount, datetime, channel, partner: config.partner })
+      let settlementDateBank: string | null = null
+      if (colSettlementDate !== null) {
+        const raw = row[colSettlementDate]
+        if (raw !== null && raw !== undefined && raw !== '') {
+          try {
+            const d = parseDate(raw, config.dateFormat)
+            settlementDateBank = d.toISOString().slice(0, 10)
+          } catch {
+            // Not parseable as a date — store raw string as-is
+            settlementDateBank = String(raw).trim() || null
+          }
+        }
+      }
+
+      let amountSettleFromBank: number | null = null
+      if (colAmountSettleFromBank !== null) {
+        const rawSettle = row[colAmountSettleFromBank]
+        if (rawSettle !== null && rawSettle !== undefined && rawSettle !== '') {
+          const n = typeof rawSettle === 'number' ? rawSettle : Number(String(rawSettle).replace(/[^0-9.-]/g, ''))
+          amountSettleFromBank = isNaN(n) ? null : n
+        }
+      }
+
+      rows.push({ rowNum: sourceRowNum, reconRef, reconRef2, amount, datetime, channel, partner: config.partner, settlementDateBank, amountSettleFromBank })
     } catch (err) {
       errors.push({
         row: sourceRowNum,
