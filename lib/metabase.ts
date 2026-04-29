@@ -46,21 +46,23 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
   const acquirerList = acquirerValues.map((v) => `'${v}'`).join(', ')
 
   if (refColumn === 'acquirer_reference_no') {
+    // STRAIGHT_JOIN forces qris (acquirer-filtered, small set) to drive the join
+    // instead of qris_transaction (full date-range scan, very large).
     return `
-      SELECT
+      SELECT STRAIGHT_JOIN
         qt.uuid AS transaction_uuid,
         q.acquirer_reference_no AS recon_ref,
         CASE WHEN q.qr_type = 'DYNAMIC' THEN q.status ELSE qt.status END AS status,
         JSON_UNQUOTE(JSON_EXTRACT(q.amount, '$.value')) AS amount_value,
         qt.updated_at,
         q.originator_reference_no
-      FROM qris_transaction qt
-      JOIN qris q ON q.uuid = qt.qris_id
-      WHERE qt.updated_at >= '${start}'
-        AND qt.updated_at < '${end}'
+      FROM qris q
+      JOIN qris_transaction qt ON qt.qris_id = q.uuid
+      WHERE q.acquirer IN (${acquirerList})
         AND q.acquirer_reference_no IS NOT NULL
         AND q.acquirer_reference_no != ''
-        AND q.acquirer IN (${acquirerList})
+        AND qt.updated_at >= '${start}'
+        AND qt.updated_at < '${end}'
       LIMIT 100000
     `.trim()
   } else {
