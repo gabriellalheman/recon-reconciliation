@@ -10,6 +10,21 @@ export type MetabaseRefColumn = 'acquirer_reference_no' | 'issuerInfo_rrn'
 const GMT7_OFFSET_MS = 7 * 60 * 60 * 1000
 const DAY_MS = 86400000
 const FEE_BATCH_SIZE = 2000
+const SNAP_CONCURRENCY = 3  // max parallel daily-window queries to Metabase
+const FEE_CONCURRENCY  = 3  // max parallel fee-batch queries to Metabase
+
+async function withConcurrency<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length)
+  let idx = 0
+  async function worker() {
+    while (idx < tasks.length) {
+      const i = idx++
+      results[i] = await tasks[i]()
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker))
+  return results
+}
 
 export interface MetabaseRow {
   reconRef: string
@@ -160,10 +175,11 @@ export async function fetchMetabaseRows(
     cur = next
   }
 
-  const snapResults = await Promise.all(
-    windows.map(({ start, end }) =>
+  const snapResults = await withConcurrency(
+    windows.map(({ start, end }) => () =>
       runQuery(baseUrl, headers, 5, buildSnapQuery(start, end, refColumn, acquirerValues))
-    )
+    ),
+    SNAP_CONCURRENCY,
   )
 
   // Build initial map and collect UUIDs for the fee lookup
@@ -214,7 +230,7 @@ export async function fetchMetabaseRows(
     batches.push(allUuids.slice(i, i + FEE_BATCH_SIZE))
   }
 
-  await Promise.all(batches.map(async (batch) => {
+  await withConcurrency(batches.map((batch) => async () => {
     const feeData = await runQuery(baseUrl, headers, 2, buildFeeQuery(batch))
 
     const feeCols             = feeData.cols.map((c) => c.name)
@@ -237,7 +253,7 @@ export async function fetchMetabaseRows(
       entry.parentMerchantName = idxParentMerchant >= 0 && row[idxParentMerchant] != null ? String(row[idxParentMerchant]) : null
       entry.feeToMerchant     = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
     }
-  }))
+  }), FEE_CONCURRENCY)
 
   return map
 }
