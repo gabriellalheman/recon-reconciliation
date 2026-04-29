@@ -9,9 +9,7 @@ export type MetabaseRefColumn = 'acquirer_reference_no' | 'issuerInfo_rrn'
 
 const GMT7_OFFSET_MS = 7 * 60 * 60 * 1000
 const DAY_MS = 86400000
-const FEE_BATCH_SIZE = 500
 const SNAP_CONCURRENCY = 3  // max parallel daily-window queries to Metabase
-const FEE_CONCURRENCY  = 2  // max parallel fee-batch queries to Metabase
 
 async function withConcurrency<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
   const results: T[] = new Array(tasks.length)
@@ -91,8 +89,7 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
   }
 }
 
-function buildFeeQuery(uuids: string[], feeStart: string, feeEnd: string): string {
-  const list = uuids.map((u) => `'${u}'`).join(', ')
+function buildFeeQuery(feeStart: string, feeEnd: string): string {
   return `
     SELECT
       at2.processor_transaction_id AS transaction_uuid,
@@ -105,7 +102,8 @@ function buildFeeQuery(uuids: string[], feeStart: string, feeEnd: string): strin
     LEFT JOIN merchants pm ON m.parent_id = pm.uuid
     WHERE at2.updated_at >= '${feeStart}'
       AND at2.updated_at < '${feeEnd}'
-      AND at2.processor_transaction_id IN (${list})
+      AND at2.type = 'PAYMENT'
+      AND at2.channel IN ('QRIS', 'QR')
   `.trim()
 }
 
@@ -231,37 +229,31 @@ export async function fetchMetabaseRows(
     return map
   }
 
-  // Query 2: Fee + merchant data from Backend Portal (DB 2) — targeted by UUIDs, parallel batches
-  const allUuids = Array.from(uuidToRef.keys())
-  const batches: string[][] = []
-  for (let i = 0; i < allUuids.length; i += FEE_BATCH_SIZE) {
-    batches.push(allUuids.slice(i, i + FEE_BATCH_SIZE))
+  // Query 2: Fee + merchant data from Backend Portal (DB 2).
+  // Filter by date + type/channel (indexed) — match to snap rows in-memory via uuidToRef.
+  // Avoids a large IN clause on the unindexed processor_transaction_id column.
+  const feeData = await runQuery(baseUrl, headers, 2, buildFeeQuery(feeStart, feeEnd))
+
+  const feeCols             = feeData.cols.map((c) => c.name)
+  const idxFeeUuid          = feeCols.indexOf('transaction_uuid')
+  const idxMerchantId       = feeCols.indexOf('merchant_id')
+  const idxMerchantName     = feeCols.indexOf('merchant_name')
+  const idxParentMerchant   = feeCols.indexOf('parent_merchant_name')
+  const idxFeeToMerchant    = feeCols.indexOf('fee_to_merchant')
+
+  for (const row of feeData.rows) {
+    const uuid = idxFeeUuid >= 0 && row[idxFeeUuid] != null ? String(row[idxFeeUuid]) : null
+    if (!uuid) continue
+    const reconRef = uuidToRef.get(uuid)
+    if (!reconRef) continue
+    const entry = map.get(reconRef)
+    if (!entry) continue
+
+    entry.merchantId         = idxMerchantId >= 0 && row[idxMerchantId] != null ? String(row[idxMerchantId]) : null
+    entry.merchantName       = idxMerchantName >= 0 && row[idxMerchantName] != null ? String(row[idxMerchantName]) : null
+    entry.parentMerchantName = idxParentMerchant >= 0 && row[idxParentMerchant] != null ? String(row[idxParentMerchant]) : null
+    entry.feeToMerchant      = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
   }
-
-  await withConcurrency(batches.map((batch) => async () => {
-    const feeData = await runQuery(baseUrl, headers, 2, buildFeeQuery(batch, feeStart, feeEnd))
-
-    const feeCols             = feeData.cols.map((c) => c.name)
-    const idxFeeUuid          = feeCols.indexOf('transaction_uuid')
-    const idxMerchantId       = feeCols.indexOf('merchant_id')
-    const idxMerchantName     = feeCols.indexOf('merchant_name')
-    const idxParentMerchant   = feeCols.indexOf('parent_merchant_name')
-    const idxFeeToMerchant    = feeCols.indexOf('fee_to_merchant')
-
-    for (const row of feeData.rows) {
-      const uuid = idxFeeUuid >= 0 && row[idxFeeUuid] != null ? String(row[idxFeeUuid]) : null
-      if (!uuid) continue
-      const reconRef = uuidToRef.get(uuid)
-      if (!reconRef) continue
-      const entry = map.get(reconRef)
-      if (!entry) continue
-
-      entry.merchantId        = idxMerchantId >= 0 && row[idxMerchantId] != null ? String(row[idxMerchantId]) : null
-      entry.merchantName      = idxMerchantName >= 0 && row[idxMerchantName] != null ? String(row[idxMerchantName]) : null
-      entry.parentMerchantName = idxParentMerchant >= 0 && row[idxParentMerchant] != null ? String(row[idxParentMerchant]) : null
-      entry.feeToMerchant     = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
-    }
-  }), FEE_CONCURRENCY)
 
   return map
 }
