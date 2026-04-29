@@ -9,9 +9,9 @@ export type MetabaseRefColumn = 'acquirer_reference_no' | 'issuerInfo_rrn'
 
 const GMT7_OFFSET_MS = 7 * 60 * 60 * 1000
 const DAY_MS = 86400000
-const FEE_BATCH_SIZE = 2000
+const FEE_BATCH_SIZE = 500
 const SNAP_CONCURRENCY = 3  // max parallel daily-window queries to Metabase
-const FEE_CONCURRENCY  = 3  // max parallel fee-batch queries to Metabase
+const FEE_CONCURRENCY  = 2  // max parallel fee-batch queries to Metabase
 
 async function withConcurrency<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
   const results: T[] = new Array(tasks.length)
