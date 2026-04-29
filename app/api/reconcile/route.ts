@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-export const maxDuration = 60
+export const maxDuration = 300
 import { getPartner } from '@/lib/partners'
 import { parsePartnerFile } from '@/lib/parse'
 import { fetchMetabaseRows } from '@/lib/metabase'
