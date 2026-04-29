@@ -48,6 +48,7 @@ function buildSnapQuery(minDate: Date, maxDate: Date, refColumn: MetabaseRefColu
         AND q.acquirer_reference_no IS NOT NULL
         AND q.acquirer_reference_no != ''
         AND q.acquirer IN (${acquirerList})
+      LIMIT 100000
     `.trim()
   } else {
     return `
@@ -198,7 +199,7 @@ export async function fetchMetabaseRows(
     batches.push(allUuids.slice(i, i + FEE_BATCH_SIZE))
   }
 
-  for (const batch of batches) {
+  await Promise.all(batches.map(async (batch) => {
     const feeQuery = buildFeeQuery(batch)
     const feeData = await runQuery(baseUrl, headers, 2, feeQuery)
 
@@ -224,7 +225,7 @@ export async function fetchMetabaseRows(
       entry.parentMerchantName = idxParentMerchantName >= 0 && row[idxParentMerchantName] != null ? String(row[idxParentMerchantName]) : null
       entry.feeToMerchant = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
     }
-  }
+  }))
 
   return map
 }
