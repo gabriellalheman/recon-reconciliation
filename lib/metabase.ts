@@ -61,8 +61,8 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
       WHERE q.acquirer IN (${acquirerList})
         AND q.acquirer_reference_no IS NOT NULL
         AND q.acquirer_reference_no != ''
-        AND qt.created_at >= '${start}'
-        AND qt.created_at < '${end}'
+        AND qt.updated_at >= '${start}'
+        AND qt.updated_at < '${end}'
       LIMIT 100000
     `.trim()
   } else {
