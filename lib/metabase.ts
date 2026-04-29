@@ -91,7 +91,7 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
   }
 }
 
-function buildFeeQuery(uuids: string[]): string {
+function buildFeeQuery(uuids: string[], feeStart: string, feeEnd: string): string {
   const list = uuids.map((u) => `'${u}'`).join(', ')
   return `
     SELECT
@@ -103,7 +103,9 @@ function buildFeeQuery(uuids: string[]): string {
     FROM account_transactions at2
     LEFT JOIN merchants m ON at2.merchant_id = m.uuid
     LEFT JOIN merchants pm ON m.parent_id = pm.uuid
-    WHERE at2.processor_transaction_id IN (${list})
+    WHERE at2.updated_at >= '${feeStart}'
+      AND at2.updated_at < '${feeEnd}'
+      AND at2.processor_transaction_id IN (${list})
   `.trim()
 }
 
@@ -169,6 +171,10 @@ export async function fetchMetabaseRows(
   const utcStart = new Date(minDate.getTime() - GMT7_OFFSET_MS)
   const utcEnd   = new Date(maxDate.getTime() + DAY_MS - GMT7_OFFSET_MS)
 
+  // Fee query window: same start, +1 extra day on end to catch settlement lag
+  const feeStart = fmt(utcStart)
+  const feeEnd   = fmt(new Date(utcEnd.getTime() + DAY_MS))
+
   const windows: { start: string; end: string }[] = []
   let cur = new Date(utcStart)
   while (cur < utcEnd) {
@@ -233,7 +239,7 @@ export async function fetchMetabaseRows(
   }
 
   await withConcurrency(batches.map((batch) => async () => {
-    const feeData = await runQuery(baseUrl, headers, 2, buildFeeQuery(batch))
+    const feeData = await runQuery(baseUrl, headers, 2, buildFeeQuery(batch, feeStart, feeEnd))
 
     const feeCols             = feeData.cols.map((c) => c.name)
     const idxFeeUuid          = feeCols.indexOf('transaction_uuid')
