@@ -2,9 +2,8 @@
 // and returns a lookup map keyed by the relevant recon reference.
 // Database: [Prod] Snap Core Processor (ID 5) + [Prod] Backend Portal (ID 2)
 //
-// Split into two queries to avoid slow cross-database JOIN on account_transactions:
-//   Query 1 (DB 5): QRIS + qris_transaction — fast, single-DB, indexed updated_at
-//   Query 2 (DB 2): account_transactions + merchants — targeted by specific UUIDs
+// Snap query is split into daily UTC windows run in parallel to avoid the
+// Cloudflare 100s origin timeout that a wide date-range query would hit.
 
 export type MetabaseRefColumn = 'acquirer_reference_no' | 'issuerInfo_rrn'
 
@@ -24,12 +23,11 @@ export interface MetabaseRow {
   feeToMerchant: number | null
 }
 
-function buildSnapQuery(minDate: Date, maxDate: Date, refColumn: MetabaseRefColumn, acquirerValues: string[]): string {
-  const utcStart = new Date(minDate.getTime() - GMT7_OFFSET_MS)
-  const utcEnd   = new Date(maxDate.getTime() + DAY_MS - GMT7_OFFSET_MS)
-  const fmt = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ')
-  const start = fmt(utcStart)
-  const end   = fmt(utcEnd)
+function fmt(d: Date): string {
+  return d.toISOString().slice(0, 19).replace('T', ' ')
+}
+
+function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn, acquirerValues: string[]): string {
   const acquirerList = acquirerValues.map((v) => `'${v}'`).join(', ')
 
   if (refColumn === 'acquirer_reference_no') {
@@ -92,7 +90,7 @@ function buildFeeQuery(uuids: string[]): string {
   `.trim()
 }
 
-async function runQuery<T>(
+async function runQuery(
   baseUrl: string,
   headers: Record<string, string>,
   database: number,
@@ -149,42 +147,59 @@ export async function fetchMetabaseRows(
     headers['CF-Access-Client-Secret'] = process.env.CF_ACCESS_CLIENT_SECRET
   }
 
-  // Query 1: QRIS data from Snap Core Processor (DB 5) — no cross-DB joins
-  const snapQuery = buildSnapQuery(minDate, maxDate, refColumn, acquirerValues)
-  const snapData = await runQuery(baseUrl, headers, 5, snapQuery)
+  // Split the full UTC window into 24h slices and run them in parallel.
+  // Each slice completes well within Cloudflare's 100s origin timeout.
+  const utcStart = new Date(minDate.getTime() - GMT7_OFFSET_MS)
+  const utcEnd   = new Date(maxDate.getTime() + DAY_MS - GMT7_OFFSET_MS)
 
-  const snapCols = snapData.cols.map((c) => c.name)
-  const idxUuid = snapCols.indexOf('transaction_uuid')
-  const idxRef = snapCols.indexOf('recon_ref')
-  const idxStatus = snapCols.indexOf('status')
-  const idxAmount = snapCols.indexOf('amount_value')
-  const idxUpdatedAt = snapCols.indexOf('updated_at')
-  const idxOriginatorRef = snapCols.indexOf('originator_reference_no')
+  const windows: { start: string; end: string }[] = []
+  let cur = new Date(utcStart)
+  while (cur < utcEnd) {
+    const next = new Date(Math.min(cur.getTime() + DAY_MS, utcEnd.getTime()))
+    windows.push({ start: fmt(cur), end: fmt(next) })
+    cur = next
+  }
+
+  const snapResults = await Promise.all(
+    windows.map(({ start, end }) =>
+      runQuery(baseUrl, headers, 5, buildSnapQuery(start, end, refColumn, acquirerValues))
+    )
+  )
 
   // Build initial map and collect UUIDs for the fee lookup
   const map = new Map<string, MetabaseRow>()
   const uuidToRef = new Map<string, string>()
 
-  for (const row of snapData.rows) {
-    const reconRef = String(row[idxRef] ?? '').trim()
-    if (!reconRef) continue
+  for (const snapData of snapResults) {
+    const snapCols = snapData.cols.map((c) => c.name)
+    const idxUuid        = snapCols.indexOf('transaction_uuid')
+    const idxRef         = snapCols.indexOf('recon_ref')
+    const idxStatus      = snapCols.indexOf('status')
+    const idxAmount      = snapCols.indexOf('amount_value')
+    const idxUpdatedAt   = snapCols.indexOf('updated_at')
+    const idxOriginator  = snapCols.indexOf('originator_reference_no')
 
-    const uuid = idxUuid >= 0 && row[idxUuid] != null ? String(row[idxUuid]) : null
+    for (const row of snapData.rows) {
+      const reconRef = String(row[idxRef] ?? '').trim()
+      if (!reconRef) continue
 
-    map.set(reconRef, {
-      reconRef,
-      status: String(row[idxStatus] ?? ''),
-      amount: parseFloat(String(row[idxAmount] ?? '0')) || 0,
-      updatedAt: String(row[idxUpdatedAt] ?? ''),
-      clientRefId: idxOriginatorRef >= 0 && row[idxOriginatorRef] != null ? String(row[idxOriginatorRef]) : null,
-      merchantId: null,
-      merchantName: null,
-      parentMerchantName: null,
-      feeToMerchant: null,
-    })
+      const uuid = idxUuid >= 0 && row[idxUuid] != null ? String(row[idxUuid]) : null
 
-    if (uuid) {
-      uuidToRef.set(uuid, reconRef)
+      map.set(reconRef, {
+        reconRef,
+        status: String(row[idxStatus] ?? ''),
+        amount: parseFloat(String(row[idxAmount] ?? '0')) || 0,
+        updatedAt: String(row[idxUpdatedAt] ?? ''),
+        clientRefId: idxOriginator >= 0 && row[idxOriginator] != null ? String(row[idxOriginator]) : null,
+        merchantId: null,
+        merchantName: null,
+        parentMerchantName: null,
+        feeToMerchant: null,
+      })
+
+      if (uuid) {
+        uuidToRef.set(uuid, reconRef)
+      }
     }
   }
 
@@ -192,7 +207,7 @@ export async function fetchMetabaseRows(
     return map
   }
 
-  // Query 2: Fee + merchant data from Backend Portal (DB 2) — targeted by UUIDs
+  // Query 2: Fee + merchant data from Backend Portal (DB 2) — targeted by UUIDs, parallel batches
   const allUuids = Array.from(uuidToRef.keys())
   const batches: string[][] = []
   for (let i = 0; i < allUuids.length; i += FEE_BATCH_SIZE) {
@@ -200,30 +215,27 @@ export async function fetchMetabaseRows(
   }
 
   await Promise.all(batches.map(async (batch) => {
-    const feeQuery = buildFeeQuery(batch)
-    const feeData = await runQuery(baseUrl, headers, 2, feeQuery)
+    const feeData = await runQuery(baseUrl, headers, 2, buildFeeQuery(batch))
 
-    const feeCols = feeData.cols.map((c) => c.name)
-    const idxFeeUuid = feeCols.indexOf('transaction_uuid')
-    const idxMerchantId = feeCols.indexOf('merchant_id')
-    const idxMerchantName = feeCols.indexOf('merchant_name')
-    const idxParentMerchantName = feeCols.indexOf('parent_merchant_name')
-    const idxFeeToMerchant = feeCols.indexOf('fee_to_merchant')
+    const feeCols             = feeData.cols.map((c) => c.name)
+    const idxFeeUuid          = feeCols.indexOf('transaction_uuid')
+    const idxMerchantId       = feeCols.indexOf('merchant_id')
+    const idxMerchantName     = feeCols.indexOf('merchant_name')
+    const idxParentMerchant   = feeCols.indexOf('parent_merchant_name')
+    const idxFeeToMerchant    = feeCols.indexOf('fee_to_merchant')
 
     for (const row of feeData.rows) {
       const uuid = idxFeeUuid >= 0 && row[idxFeeUuid] != null ? String(row[idxFeeUuid]) : null
       if (!uuid) continue
-
       const reconRef = uuidToRef.get(uuid)
       if (!reconRef) continue
-
       const entry = map.get(reconRef)
       if (!entry) continue
 
-      entry.merchantId = idxMerchantId >= 0 && row[idxMerchantId] != null ? String(row[idxMerchantId]) : null
-      entry.merchantName = idxMerchantName >= 0 && row[idxMerchantName] != null ? String(row[idxMerchantName]) : null
-      entry.parentMerchantName = idxParentMerchantName >= 0 && row[idxParentMerchantName] != null ? String(row[idxParentMerchantName]) : null
-      entry.feeToMerchant = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
+      entry.merchantId        = idxMerchantId >= 0 && row[idxMerchantId] != null ? String(row[idxMerchantId]) : null
+      entry.merchantName      = idxMerchantName >= 0 && row[idxMerchantName] != null ? String(row[idxMerchantName]) : null
+      entry.parentMerchantName = idxParentMerchant >= 0 && row[idxParentMerchant] != null ? String(row[idxParentMerchant]) : null
+      entry.feeToMerchant     = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
     }
   }))
 
