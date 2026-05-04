@@ -230,29 +230,37 @@ export async function fetchMetabaseRows(
   }
 
   // Query 2: Fee + merchant data from Backend Portal (DB 2).
-  // Filter by date + type/channel (indexed) — match to snap rows in-memory via uuidToRef.
-  // Avoids a large IN clause on the unindexed processor_transaction_id column.
-  const feeData = await runQuery(baseUrl, headers, 2, buildFeeQuery(feeStart, feeEnd))
+  // Split into the same daily windows as snap, each +1 extra day for settlement lag.
+  // Keeps each individual request small; match to snap rows in-memory via uuidToRef.
+  const feeResults = await withConcurrency(
+    windows.map(({ start, end }) => {
+      const wFeeEnd = fmt(new Date(new Date(end).getTime() + DAY_MS))
+      return () => runQuery(baseUrl, headers, 2, buildFeeQuery(start, wFeeEnd))
+    }),
+    SNAP_CONCURRENCY,
+  )
 
-  const feeCols             = feeData.cols.map((c) => c.name)
-  const idxFeeUuid          = feeCols.indexOf('transaction_uuid')
-  const idxMerchantId       = feeCols.indexOf('merchant_id')
-  const idxMerchantName     = feeCols.indexOf('merchant_name')
-  const idxParentMerchant   = feeCols.indexOf('parent_merchant_name')
-  const idxFeeToMerchant    = feeCols.indexOf('fee_to_merchant')
+  for (const feeData of feeResults) {
+    const feeCols           = feeData.cols.map((c) => c.name)
+    const idxFeeUuid        = feeCols.indexOf('transaction_uuid')
+    const idxMerchantId     = feeCols.indexOf('merchant_id')
+    const idxMerchantName   = feeCols.indexOf('merchant_name')
+    const idxParentMerchant = feeCols.indexOf('parent_merchant_name')
+    const idxFeeToMerchant  = feeCols.indexOf('fee_to_merchant')
 
-  for (const row of feeData.rows) {
-    const uuid = idxFeeUuid >= 0 && row[idxFeeUuid] != null ? String(row[idxFeeUuid]) : null
-    if (!uuid) continue
-    const reconRef = uuidToRef.get(uuid)
-    if (!reconRef) continue
-    const entry = map.get(reconRef)
-    if (!entry) continue
+    for (const row of feeData.rows) {
+      const uuid = idxFeeUuid >= 0 && row[idxFeeUuid] != null ? String(row[idxFeeUuid]) : null
+      if (!uuid) continue
+      const reconRef = uuidToRef.get(uuid)
+      if (!reconRef) continue
+      const entry = map.get(reconRef)
+      if (!entry) continue
 
-    entry.merchantId         = idxMerchantId >= 0 && row[idxMerchantId] != null ? String(row[idxMerchantId]) : null
-    entry.merchantName       = idxMerchantName >= 0 && row[idxMerchantName] != null ? String(row[idxMerchantName]) : null
-    entry.parentMerchantName = idxParentMerchant >= 0 && row[idxParentMerchant] != null ? String(row[idxParentMerchant]) : null
-    entry.feeToMerchant      = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
+      entry.merchantId         = idxMerchantId >= 0 && row[idxMerchantId] != null ? String(row[idxMerchantId]) : null
+      entry.merchantName       = idxMerchantName >= 0 && row[idxMerchantName] != null ? String(row[idxMerchantName]) : null
+      entry.parentMerchantName = idxParentMerchant >= 0 && row[idxParentMerchant] != null ? String(row[idxParentMerchant]) : null
+      entry.feeToMerchant      = idxFeeToMerchant >= 0 && row[idxFeeToMerchant] != null ? parseFloat(String(row[idxFeeToMerchant])) || 0 : null
+    }
   }
 
   return map
