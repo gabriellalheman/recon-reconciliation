@@ -84,7 +84,7 @@ function dateOnly(d: Date): Date {
 }
 
 export function parsePartnerFile(fileBuffer: Buffer, config: PartnerConfig): ParseResult {
-  const workbook = XLSX.read(fileBuffer, { type: 'buffer', cellDates: true, raw: false })
+  const workbook = XLSX.read(fileBuffer, { type: 'buffer', raw: false })
   const sheetName = workbook.SheetNames[0]
   const sheet = workbook.Sheets[sheetName]
   const allRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' })
