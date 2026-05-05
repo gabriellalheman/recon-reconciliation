@@ -1,9 +1,9 @@
 // Metabase query layer — fetches qris_transaction records for a date range
 // and returns a lookup map keyed by the relevant recon reference.
-// Database: [Prod] Snap Core Processor (ID 5) + [Prod] Backend Portal (ID 2)
+// Database: data-team-production (ID 8, BigQuery) — datasets snap_core_processor + backend_portal
 //
-// Snap query is split into daily UTC windows run in parallel to avoid the
-// Cloudflare 100s origin timeout that a wide date-range query would hit.
+// Queries are split into daily UTC windows run in parallel to stay well within
+// the Cloudflare 100s origin timeout on the Metabase host.
 
 export type MetabaseRefColumn = 'acquirer_reference_no' | 'issuerInfo_rrn'
 
@@ -44,23 +44,21 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
   const acquirerList = acquirerValues.map((v) => `'${v}'`).join(', ')
 
   if (refColumn === 'acquirer_reference_no') {
-    // STRAIGHT_JOIN forces qris (acquirer-filtered, small set) to drive the join
-    // instead of qris_transaction (full date-range scan, very large).
     return `
-      SELECT STRAIGHT_JOIN
+      SELECT
         qt.uuid AS transaction_uuid,
         q.acquirer_reference_no AS recon_ref,
         CASE WHEN q.qr_type = 'DYNAMIC' THEN q.status ELSE qt.status END AS status,
-        JSON_UNQUOTE(JSON_EXTRACT(q.amount, '$.value')) AS amount_value,
+        JSON_VALUE(q.amount, '$.value') AS amount_value,
         qt.updated_at,
         q.originator_reference_no
-      FROM qris q
-      JOIN qris_transaction qt ON qt.qris_id = q.uuid
+      FROM snap_core_processor.qris q
+      JOIN snap_core_processor.qris_transaction qt ON qt.qris_id = q.uuid
       WHERE q.acquirer IN (${acquirerList})
         AND q.acquirer_reference_no IS NOT NULL
         AND q.acquirer_reference_no != ''
-        AND qt.created_at >= '${start}'
-        AND qt.created_at < '${end}'
+        AND qt.created_at >= TIMESTAMP('${start}')
+        AND qt.created_at < TIMESTAMP('${end}')
       LIMIT 100000
     `.trim()
   } else {
@@ -68,20 +66,20 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
       SELECT
         qt.uuid AS transaction_uuid,
         COALESCE(
-          JSON_UNQUOTE(JSON_EXTRACT(q.additional_info, '$.issuerInfo.rrn')),
-          JSON_UNQUOTE(JSON_EXTRACT(q.additional_info, '$.issuerRrn'))
+          JSON_VALUE(q.additional_info, '$.issuerInfo.rrn'),
+          JSON_VALUE(q.additional_info, '$.issuerRrn')
         ) AS recon_ref,
         CASE WHEN q.qr_type = 'DYNAMIC' THEN q.status ELSE qt.status END AS status,
-        JSON_UNQUOTE(JSON_EXTRACT(q.amount, '$.value')) AS amount_value,
+        JSON_VALUE(q.amount, '$.value') AS amount_value,
         qt.updated_at,
         q.originator_reference_no
-      FROM qris_transaction qt
-      JOIN qris q ON q.uuid = qt.qris_id
-      WHERE qt.updated_at >= '${start}'
-        AND qt.updated_at < '${end}'
+      FROM snap_core_processor.qris_transaction qt
+      JOIN snap_core_processor.qris q ON q.uuid = qt.qris_id
+      WHERE qt.updated_at >= TIMESTAMP('${start}')
+        AND qt.updated_at < TIMESTAMP('${end}')
         AND COALESCE(
-          JSON_EXTRACT(q.additional_info, '$.issuerInfo.rrn'),
-          JSON_EXTRACT(q.additional_info, '$.issuerRrn')
+          JSON_VALUE(q.additional_info, '$.issuerInfo.rrn'),
+          JSON_VALUE(q.additional_info, '$.issuerRrn')
         ) IS NOT NULL
         AND q.acquirer IN (${acquirerList})
       LIMIT 100000
@@ -96,12 +94,12 @@ function buildFeeQuery(feeStart: string, feeEnd: string): string {
       at2.merchant_id,
       m.name AS merchant_name,
       pm.name AS parent_merchant_name,
-      ROUND(JSON_UNQUOTE(JSON_EXTRACT(at2.additional_info, '$.feeDetail.finalAmount')), 0) AS fee_to_merchant
-    FROM account_transactions at2
-    LEFT JOIN merchants m ON at2.merchant_id = m.uuid
-    LEFT JOIN merchants pm ON m.parent_id = pm.uuid
-    WHERE at2.transaction_timestamp >= '${feeStart}'
-      AND at2.transaction_timestamp < '${feeEnd}'
+      ROUND(CAST(JSON_VALUE(at2.additional_info, '$.feeDetail.finalAmount') AS FLOAT64), 0) AS fee_to_merchant
+    FROM backend_portal.account_transactions at2
+    LEFT JOIN backend_portal.merchants m ON at2.merchant_id = m.uuid
+    LEFT JOIN backend_portal.merchants pm ON m.parent_id = pm.uuid
+    WHERE at2.transaction_timestamp >= TIMESTAMP('${feeStart}')
+      AND at2.transaction_timestamp < TIMESTAMP('${feeEnd}')
       AND at2.type = 'PAYMENT'
       AND at2.channel IN ('QRIS', 'QR')
   `.trim()
@@ -179,7 +177,7 @@ export async function fetchMetabaseRows(
 
   const snapResults = await withConcurrency(
     windows.map(({ start, end }) => () =>
-      runQuery(baseUrl, headers, 5, buildSnapQuery(start, end, refColumn, acquirerValues))
+      runQuery(baseUrl, headers, 8, buildSnapQuery(start, end, refColumn, acquirerValues))
     ),
     SNAP_CONCURRENCY,
   )
@@ -225,11 +223,11 @@ export async function fetchMetabaseRows(
     return map
   }
 
-  // Query 2: Fee + merchant data from Backend Portal (DB 2).
+  // Query 2: Fee + merchant data from backend_portal dataset (BigQuery, DB 8).
   // Same daily windows as snap; transaction_timestamp is indexed so no extra day needed.
   // Match to snap rows in-memory via uuidToRef.
   const feeResults = await withConcurrency(
-    windows.map(({ start, end }) => () => runQuery(baseUrl, headers, 2, buildFeeQuery(start, end))),
+    windows.map(({ start, end }) => () => runQuery(baseUrl, headers, 8, buildFeeQuery(start, end))),
     SNAP_CONCURRENCY,
   )
 
