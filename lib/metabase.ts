@@ -100,8 +100,8 @@ function buildFeeQuery(feeStart: string, feeEnd: string): string {
     FROM account_transactions at2
     LEFT JOIN merchants m ON at2.merchant_id = m.uuid
     LEFT JOIN merchants pm ON m.parent_id = pm.uuid
-    WHERE at2.updated_at >= '${feeStart}'
-      AND at2.updated_at < '${feeEnd}'
+    WHERE at2.transaction_timestamp >= '${feeStart}'
+      AND at2.transaction_timestamp < '${feeEnd}'
       AND at2.type = 'PAYMENT'
       AND at2.channel IN ('QRIS', 'QR')
   `.trim()
@@ -169,10 +169,6 @@ export async function fetchMetabaseRows(
   const utcStart = new Date(minDate.getTime() - GMT7_OFFSET_MS)
   const utcEnd   = new Date(maxDate.getTime() + DAY_MS - GMT7_OFFSET_MS)
 
-  // Fee query window: same start, +1 extra day on end to catch settlement lag
-  const feeStart = fmt(utcStart)
-  const feeEnd   = fmt(new Date(utcEnd.getTime() + DAY_MS))
-
   const windows: { start: string; end: string }[] = []
   let cur = new Date(utcStart)
   while (cur < utcEnd) {
@@ -230,13 +226,10 @@ export async function fetchMetabaseRows(
   }
 
   // Query 2: Fee + merchant data from Backend Portal (DB 2).
-  // Split into the same daily windows as snap, each +1 extra day for settlement lag.
-  // Keeps each individual request small; match to snap rows in-memory via uuidToRef.
+  // Same daily windows as snap; transaction_timestamp is indexed so no extra day needed.
+  // Match to snap rows in-memory via uuidToRef.
   const feeResults = await withConcurrency(
-    windows.map(({ start, end }) => {
-      const wFeeEnd = fmt(new Date(new Date(end).getTime() + DAY_MS))
-      return () => runQuery(baseUrl, headers, 2, buildFeeQuery(start, wFeeEnd))
-    }),
+    windows.map(({ start, end }) => () => runQuery(baseUrl, headers, 2, buildFeeQuery(start, end))),
     SNAP_CONCURRENCY,
   )
 
