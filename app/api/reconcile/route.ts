@@ -56,20 +56,28 @@ export async function POST(req: NextRequest) {
   const uploadedAt = new Date().toISOString()
   const reconRefs = rows.map((r) => r.reconRef)
 
+  const SUPABASE_BATCH = 500
+
+  function chunks<T>(arr: T[], size: number): T[][] {
+    const result: T[][] = []
+    for (let i = 0; i < arr.length; i += size) result.push(arr.slice(i, i + size))
+    return result
+  }
+
   let supabaseWarning: string | undefined
   try {
     const supabase = getSupabase()
 
-    // Fetch existing statuses for these refs so we can apply the no-downgrade rule
-    const { data: existing } = await supabase
-      .from('recon_results')
-      .select('recon_ref, recon_status')
-      .eq('partner', config.partner)
-      .in('recon_ref', reconRefs)
-
-    const existingStatusMap = new Map<string, string>(
-      (existing ?? []).map((r) => [r.recon_ref, r.recon_status])
-    )
+    // Fetch existing statuses in batches — large IN clauses hang Supabase
+    const existingStatusMap = new Map<string, string>()
+    for (const batch of chunks(reconRefs, SUPABASE_BATCH)) {
+      const { data } = await supabase
+        .from('recon_results')
+        .select('recon_ref, recon_status')
+        .eq('partner', config.partner)
+        .in('recon_ref', batch)
+      for (const r of data ?? []) existingStatusMap.set(r.recon_ref, r.recon_status)
+    }
 
     const upsertPayload = rows
       .filter((row) => {
@@ -102,12 +110,14 @@ export async function POST(req: NextRequest) {
         amount_settle_from_bank: row.amountSettleFromBank ?? null,
       }))
 
-    if (upsertPayload.length > 0) {
+    // Upsert in batches — single call with 12K rows hangs Supabase
+    for (const batch of chunks(upsertPayload, SUPABASE_BATCH)) {
       const { error: upsertError } = await supabase
         .from('recon_results')
-        .upsert(upsertPayload, { onConflict: 'recon_ref,partner' })
+        .upsert(batch, { onConflict: 'recon_ref,partner' })
       if (upsertError) {
         supabaseWarning = `Results not saved to DB: ${upsertError.message}`
+        break
       }
     }
   } catch (err) {
