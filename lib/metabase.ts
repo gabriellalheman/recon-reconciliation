@@ -52,8 +52,8 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
         JSON_VALUE(q.amount, '$.value') AS amount_value,
         qt.updated_at,
         q.originator_reference_no
-      FROM snap_core_processor.qris q
-      JOIN snap_core_processor.qris_transaction qt ON qt.qris_id = q.uuid
+      FROM \`data-team-production.snap_core_processor.qris\` q
+      JOIN \`data-team-production.snap_core_processor.qris_transaction\` qt ON qt.qris_id = q.uuid
       WHERE q.acquirer IN (${acquirerList})
         AND q.acquirer_reference_no IS NOT NULL
         AND q.acquirer_reference_no != ''
@@ -73,8 +73,8 @@ function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn
         JSON_VALUE(q.amount, '$.value') AS amount_value,
         qt.updated_at,
         q.originator_reference_no
-      FROM snap_core_processor.qris_transaction qt
-      JOIN snap_core_processor.qris q ON q.uuid = qt.qris_id
+      FROM \`data-team-production.snap_core_processor.qris_transaction\` qt
+      JOIN \`data-team-production.snap_core_processor.qris\` q ON q.uuid = qt.qris_id
       WHERE qt.updated_at >= TIMESTAMP('${start}')
         AND qt.updated_at < TIMESTAMP('${end}')
         AND COALESCE(
@@ -95,9 +95,9 @@ function buildFeeQuery(feeStart: string, feeEnd: string): string {
       m.name AS merchant_name,
       pm.name AS parent_merchant_name,
       ROUND(CAST(JSON_VALUE(at2.additional_info, '$.feeDetail.finalAmount') AS FLOAT64), 0) AS fee_to_merchant
-    FROM backend_portal.account_transactions at2
-    LEFT JOIN backend_portal.merchants m ON at2.merchant_id = m.uuid
-    LEFT JOIN backend_portal.merchants pm ON m.parent_id = pm.uuid
+    FROM \`data-team-production.backend_portal.account_transactions\` at2
+    LEFT JOIN \`data-team-production.backend_portal.merchants\` m ON at2.merchant_id = m.uuid
+    LEFT JOIN \`data-team-production.backend_portal.merchants\` pm ON m.parent_id = pm.uuid
     WHERE at2.transaction_timestamp >= TIMESTAMP('${feeStart}')
       AND at2.transaction_timestamp < TIMESTAMP('${feeEnd}')
       AND at2.type = 'PAYMENT'
