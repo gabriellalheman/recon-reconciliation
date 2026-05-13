@@ -6,13 +6,13 @@ const PAGE_SIZE = 1000
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const partner = searchParams.get('partner')
+  const channel = searchParams.get('channel') || null
   const dateFrom = searchParams.get('dateFrom')
   const dateTo = searchParams.get('dateTo')
   const download = searchParams.get('download') === '1'
 
-  if (!partner || !dateFrom || !dateTo) {
-    return NextResponse.json({ error: 'Missing partner, dateFrom, or dateTo' }, { status: 400 })
+  if (!dateFrom || !dateTo) {
+    return NextResponse.json({ error: 'Missing dateFrom or dateTo' }, { status: 400 })
   }
 
   const utcFrom = new Date(dateFrom + 'T00:00:00.000Z').toISOString()
@@ -20,18 +20,19 @@ export async function GET(req: NextRequest) {
 
   const supabase = getSupabase()
 
-  // Fetch partner rows (paginated)
+  // Fetch rows by partner_datetime
   const partnerRows: unknown[] = []
   let from = 0
   while (true) {
-    const { data, error } = await supabase
+    let query = supabase
       .from('recon_results')
       .select('*')
-      .eq('partner', partner)
       .gte('partner_datetime', utcFrom)
       .lte('partner_datetime', utcTo)
       .order('partner_datetime', { ascending: true, nullsFirst: false })
       .range(from, from + PAGE_SIZE - 1)
+    if (channel) query = query.eq('channel', channel)
+    const { data, error } = await query
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     if (!data || data.length === 0) break
     partnerRows.push(...data)
@@ -39,18 +40,19 @@ export async function GET(req: NextRequest) {
     from += PAGE_SIZE
   }
 
-  // Fetch not_in_partner / manually_resolved rows by internal_updated_at (paginated)
+  // Fetch not_in_partner / manually_resolved rows by internal_updated_at
   const internalOnlyRows: unknown[] = []
   let from2 = 0
   while (true) {
-    const { data, error } = await supabase
+    let query = supabase
       .from('recon_results')
       .select('*')
-      .eq('partner', partner)
       .in('recon_status', ['not_in_partner', 'manually_resolved'])
       .gte('internal_updated_at', utcFrom)
       .lte('internal_updated_at', utcTo)
       .range(from2, from2 + PAGE_SIZE - 1)
+    if (channel) query = query.eq('channel', channel)
+    const { data, error } = await query
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     if (!data || data.length === 0) break
     internalOnlyRows.push(...data)
@@ -58,12 +60,13 @@ export async function GET(req: NextRequest) {
     from2 += PAGE_SIZE
   }
 
-  // Merge, deduplicate by recon_ref
+  // Merge, deduplicate by recon_ref+partner
   const seen = new Set<string>()
   const combined = [...partnerRows, ...internalOnlyRows].filter((r) => {
-    const row = r as { recon_ref: string }
-    if (seen.has(row.recon_ref)) return false
-    seen.add(row.recon_ref)
+    const row = r as { recon_ref: string; partner: string }
+    const key = `${row.partner}:${row.recon_ref}`
+    if (seen.has(key)) return false
+    seen.add(key)
     return true
   }) as Record<string, unknown>[]
 
@@ -109,17 +112,16 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const body = await req.json() as { reconRefs: string[]; partner: string }
-  const { reconRefs, partner } = body
+  const body = await req.json() as { reconRefs: string[] }
+  const { reconRefs } = body
 
-  if (!reconRefs?.length || !partner) {
-    return NextResponse.json({ error: 'Missing reconRefs or partner' }, { status: 400 })
+  if (!reconRefs?.length) {
+    return NextResponse.json({ error: 'Missing reconRefs' }, { status: 400 })
   }
 
   const { error } = await getSupabase()
     .from('recon_results')
     .update({ recon_status: 'manually_resolved', last_upload_at: new Date().toISOString() })
-    .eq('partner', partner)
     .in('recon_ref', reconRefs)
     .not('recon_status', 'eq', 'done')
 

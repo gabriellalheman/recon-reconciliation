@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { PARTNERS, VIEW_PARTNERS, partnersByGroup } from '@/lib/partners'
+import { PARTNERS, partnersByGroup } from '@/lib/partners'
 import type { ReconRow, ReconStatus } from '@/lib/reconcile'
 
 interface Summary {
@@ -342,7 +342,7 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Results view state
-  const [viewPartner, setViewPartner] = useState('')
+  const [viewChannel, setViewChannel] = useState('')
   const [viewDateFrom, setViewDateFrom] = useState('')
   const [viewDateTo, setViewDateTo] = useState('')
   const [viewLoading, setViewLoading] = useState(false)
@@ -431,7 +431,7 @@ export default function Home() {
 
   async function handleViewSearch(e: React.FormEvent) {
     e.preventDefault()
-    if (!viewPartner || !viewDateFrom || !viewDateTo) return
+    if (!viewDateFrom || !viewDateTo) return
 
     setViewLoading(true)
     setViewError('')
@@ -440,7 +440,8 @@ export default function Home() {
     setViewSearch('')
 
     try {
-      const params = new URLSearchParams({ partner: viewPartner, dateFrom: viewDateFrom, dateTo: viewDateTo })
+      const params = new URLSearchParams({ dateFrom: viewDateFrom, dateTo: viewDateTo })
+      if (viewChannel) params.set('channel', viewChannel)
       const res = await fetch(`/api/results?${params}`)
       const json = await res.json() as ResultsResponse
       if (!res.ok) {
@@ -470,18 +471,18 @@ export default function Home() {
   }
 
   async function handleMarkResolved() {
-    if (selectedRefs.size === 0 || !viewPartner) return
+    if (selectedRefs.size === 0) return
     setResolving(true)
     try {
       const res = await fetch('/api/results', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reconRefs: Array.from(selectedRefs), partner: viewPartner }),
+        body: JSON.stringify({ reconRefs: Array.from(selectedRefs) }),
       })
       if (res.ok) {
         setSelectedRefs(new Set())
-        // Re-fetch to reflect updated statuses
-        const params = new URLSearchParams({ partner: viewPartner, dateFrom: viewDateFrom, dateTo: viewDateTo })
+        const params = new URLSearchParams({ dateFrom: viewDateFrom, dateTo: viewDateTo })
+        if (viewChannel) params.set('channel', viewChannel)
         const r2 = await fetch(`/api/results?${params}`)
         const json = await r2.json() as ResultsResponse
         setViewResult(json)
@@ -493,10 +494,12 @@ export default function Home() {
 
   async function handleViewDownload() {
     if (!viewResult) return
-    const params = new URLSearchParams({ partner: viewPartner, dateFrom: viewDateFrom, dateTo: viewDateTo, download: '1' })
+    const params = new URLSearchParams({ dateFrom: viewDateFrom, dateTo: viewDateTo, download: '1' })
+    if (viewChannel) params.set('channel', viewChannel)
     const res = await fetch(`/api/results?${params}`)
     const json = await res.json() as { excelBase64: string }
-    downloadExcel(json.excelBase64, `recon-${viewPartner}-${viewDateFrom}-${viewDateTo}.xlsx`)
+    const label = viewChannel || 'all'
+    downloadExcel(json.excelBase64, `recon-${label}-${viewDateFrom}-${viewDateTo}.xlsx`)
   }
 
   function downloadExcel(base64: string, filename: string) {
@@ -744,17 +747,15 @@ export default function Home() {
           <form onSubmit={handleViewSearch} className="bg-white rounded-xl border border-slate-200 p-6 space-y-5 max-w-2xl">
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-slate-700">Partner</label>
+                <label className="block text-sm font-medium text-slate-700">Channel</label>
                 <select
-                  value={viewPartner}
-                  onChange={(e) => setViewPartner(e.target.value)}
-                  required
+                  value={viewChannel}
+                  onChange={(e) => setViewChannel(e.target.value)}
                   className="w-full h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-400"
                 >
-                  <option value="">Select partner...</option>
-                  {VIEW_PARTNERS.map((p) => (
-                    <option key={p.partner} value={p.partner}>{p.label}</option>
-                  ))}
+                  <option value="">All channels</option>
+                  <option value="QRIS">QRIS</option>
+                  <option value="DISBURSEMENT">Disbursement</option>
                 </select>
               </div>
               <div className="space-y-2">
@@ -780,7 +781,7 @@ export default function Home() {
             </div>
             <button
               type="submit"
-              disabled={viewLoading || !viewPartner || !viewDateFrom || !viewDateTo}
+              disabled={viewLoading || !viewDateFrom || !viewDateTo}
               className="h-10 px-6 rounded-md bg-slate-900 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               {viewLoading ? 'Loading...' : 'View Results'}
