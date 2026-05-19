@@ -1,3 +1,9 @@
 {
-  "alias": ["pivot-reconciliation.vercel.app"]
+  "alias": ["pivot-reconciliation.vercel.app"],
+  "crons": [
+    {
+      "path": "/api/cron/purge",
+      "schedule": "0 2 * * 0"
+    }
+  ]
 }

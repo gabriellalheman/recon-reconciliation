@@ -191,8 +191,10 @@ function ReconTable({
   const filtered = rows.filter((r) => {
     if (activeFilters.size > 0 && !activeFilters.has(getStatus(r))) return false
     if (search) {
+      const q = search.toLowerCase()
       const ref = getRef(r).toLowerCase()
-      if (!ref.includes(search.toLowerCase())) return false
+      const clientRef = (getClientRefId(r) ?? '').toLowerCase()
+      if (!ref.includes(q) && !clientRef.includes(q)) return false
     }
     return true
   })
@@ -631,7 +633,7 @@ export default function Home() {
                   <div className="flex gap-3 items-center">
                     <input
                       type="text"
-                      placeholder="Search by recon ref..."
+                      placeholder="Search by recon ref or client ref ID..."
                       value={uploadSearch}
                       onChange={(e) => setUploadSearch(e.target.value)}
                       className="h-9 w-72 rounded-md border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
@@ -717,7 +719,7 @@ export default function Home() {
                   <div className="flex gap-3 items-center">
                     <input
                       type="text"
-                      placeholder="Search by recon ref..."
+                      placeholder="Search by recon ref or client ref ID..."
                       value={disbSearch}
                       onChange={(e) => setDisbSearch(e.target.value)}
                       className="h-9 w-72 rounded-md border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
@@ -825,7 +827,7 @@ export default function Home() {
                   <div className="flex gap-3 items-center justify-between">
                     <input
                       type="text"
-                      placeholder="Search by recon ref..."
+                      placeholder="Search by recon ref or client ref ID..."
                       value={viewSearch}
                       onChange={(e) => setViewSearch(e.target.value)}
                       className="h-9 w-72 rounded-md border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
