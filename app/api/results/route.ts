@@ -20,58 +20,29 @@ export async function GET(req: NextRequest) {
 
   const supabase = getSupabase()
 
-  // Fetch rows by partner_datetime
-  const partnerRows: unknown[] = []
+  const combined: unknown[] = []
   let from = 0
   while (true) {
     let query = supabase
       .from('recon_results')
       .select('*')
-      .gte('partner_datetime', utcFrom)
-      .lte('partner_datetime', utcTo)
-      .order('partner_datetime', { ascending: true, nullsFirst: false })
+      .gte('internal_updated_at', utcFrom)
+      .lte('internal_updated_at', utcTo)
+      .order('internal_updated_at', { ascending: true, nullsFirst: false })
       .range(from, from + PAGE_SIZE - 1)
     if (channel) query = query.eq('channel', channel)
     const { data, error } = await query
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     if (!data || data.length === 0) break
-    partnerRows.push(...data)
+    combined.push(...data)
     if (data.length < PAGE_SIZE) break
     from += PAGE_SIZE
   }
 
-  // Fetch not_in_partner / manually_resolved rows by internal_updated_at
-  const internalOnlyRows: unknown[] = []
-  let from2 = 0
-  while (true) {
-    let query = supabase
-      .from('recon_results')
-      .select('*')
-      .in('recon_status', ['not_in_partner', 'manually_resolved'])
-      .gte('internal_updated_at', utcFrom)
-      .lte('internal_updated_at', utcTo)
-      .range(from2, from2 + PAGE_SIZE - 1)
-    if (channel) query = query.eq('channel', channel)
-    const { data, error } = await query
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    if (!data || data.length === 0) break
-    internalOnlyRows.push(...data)
-    if (data.length < PAGE_SIZE) break
-    from2 += PAGE_SIZE
-  }
-
-  // Merge, deduplicate by recon_ref+partner
-  const seen = new Set<string>()
-  const combined = [...partnerRows, ...internalOnlyRows].filter((r) => {
-    const row = r as { recon_ref: string; partner: string }
-    const key = `${row.partner}:${row.recon_ref}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  }) as Record<string, unknown>[]
+  const rows = combined as Record<string, unknown>[]
 
   if (download) {
-    const excelRows = combined.map((r) => ({
+    const excelRows = rows.map((r) => ({
       'Recon Ref': r.recon_ref,
       'Recon Ref 2': r.recon_ref_2 ?? '',
       'Partner': r.partner,
@@ -100,15 +71,15 @@ export async function GET(req: NextRequest) {
   }
 
   const summary = {
-    total: combined.length,
-    done: combined.filter((r) => r.recon_status === 'done').length,
-    status_not_success: combined.filter((r) => r.recon_status === 'status_not_success').length,
-    not_in_internal: combined.filter((r) => r.recon_status === 'not_in_internal').length,
-    not_in_partner: combined.filter((r) => r.recon_status === 'not_in_partner').length,
-    manually_resolved: combined.filter((r) => r.recon_status === 'manually_resolved').length,
+    total: rows.length,
+    done: rows.filter((r) => r.recon_status === 'done').length,
+    status_not_success: rows.filter((r) => r.recon_status === 'status_not_success').length,
+    not_in_internal: rows.filter((r) => r.recon_status === 'not_in_internal').length,
+    not_in_partner: rows.filter((r) => r.recon_status === 'not_in_partner').length,
+    manually_resolved: rows.filter((r) => r.recon_status === 'manually_resolved').length,
   }
 
-  return NextResponse.json({ rows: combined, summary })
+  return NextResponse.json({ rows, summary })
 }
 
 export async function PATCH(req: NextRequest) {
