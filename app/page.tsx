@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { PARTNERS, partnersByGroup } from '@/lib/partners'
 import type { ReconRow, ReconStatus } from '@/lib/reconcile'
 
@@ -43,6 +43,21 @@ interface DbRow {
   amount_settle_to_merchant: number | null
   settlement_date_bank: string | null
   amount_settle_from_bank: number | null
+}
+
+interface UploadLog {
+  id: number
+  uploaded_at: string
+  filename: string
+  partner: string
+  channel: string | null
+  file_date_min: string | null
+  file_date_max: string | null
+  total_rows: number | null
+  done: number | null
+  not_in_internal: number | null
+  not_in_partner: number | null
+  status_not_success: number | null
 }
 
 interface ResultsResponse {
@@ -369,6 +384,26 @@ export default function Home() {
 
   const selectedPartner = PARTNERS.find((p) => p.id === partnerId)
 
+  const [uploadLogs, setUploadLogs] = useState<UploadLog[]>([])
+  const [logsLoading, setLogsLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/upload-logs')
+      .then((r) => r.json())
+      .then((d) => setUploadLogs(d.logs ?? []))
+      .catch(() => {})
+      .finally(() => setLogsLoading(false))
+  }, [])
+
+  function refreshLogs() {
+    setLogsLoading(true)
+    fetch('/api/upload-logs')
+      .then((r) => r.json())
+      .then((d) => setUploadLogs(d.logs ?? []))
+      .catch(() => {})
+      .finally(() => setLogsLoading(false))
+  }
+
   function resetUpload() {
     setFile(null)
     setUploadResult(null)
@@ -399,6 +434,7 @@ export default function Home() {
       }
       setUploadResult(json)
       setUploadTableOpen(false)
+      refreshLogs()
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Unexpected error')
     } finally {
@@ -526,6 +562,65 @@ export default function Home() {
             Upload partner settlement reports and view the full accumulated reconciliation picture.
           </p>
         </div>
+
+        {/* ── Upload History ── */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-700">Upload History</h2>
+            <button onClick={refreshLogs} className="text-xs text-slate-400 hover:text-slate-600 transition-colors">
+              Refresh
+            </button>
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            {logsLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-400 text-center">Loading...</p>
+            ) : uploadLogs.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-400 text-center">No uploads recorded yet</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Uploaded At (WIB)</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Filename</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Partner</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Channel</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">File Date</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Total</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Done</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Not in Partner</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wide">Not in Internal</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {uploadLogs.map((log) => {
+                      const wib = new Date(new Date(log.uploaded_at).getTime() + 7 * 60 * 60 * 1000)
+                      const wibStr = wib.toISOString().replace('T', ' ').slice(0, 19)
+                      const fileDate = log.file_date_min === log.file_date_max
+                        ? (log.file_date_min ?? '—')
+                        : `${log.file_date_min} → ${log.file_date_max}`
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-2.5 text-slate-500 text-xs whitespace-nowrap">{wibStr}</td>
+                          <td className="px-4 py-2.5 text-slate-900 text-xs font-mono max-w-[220px] truncate" title={log.filename}>{log.filename}</td>
+                          <td className="px-4 py-2.5 text-slate-900">{log.partner}</td>
+                          <td className="px-4 py-2.5 text-slate-500">{log.channel ?? '—'}</td>
+                          <td className="px-4 py-2.5 text-slate-500 text-xs whitespace-nowrap">{fileDate}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-slate-900">{log.total_rows?.toLocaleString() ?? '—'}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-green-700">{log.done?.toLocaleString() ?? '—'}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-orange-600">{log.not_in_partner?.toLocaleString() ?? '—'}</td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-red-600">{log.not_in_internal?.toLocaleString() ?? '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <div className="border-t border-slate-200" />
 
         {/* ── Section 1: Upload ── */}
         <section className="space-y-4">
