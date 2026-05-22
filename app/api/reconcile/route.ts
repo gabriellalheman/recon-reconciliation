@@ -124,6 +124,28 @@ export async function POST(req: NextRequest) {
     supabaseWarning = `Results not saved to DB: ${err instanceof Error ? err.message : 'Supabase unavailable'}`
   }
 
+  // Derive channel for audit log — use config.channel if fixed, else most common channel in rows
+  const auditChannel = config.channel ?? (rows.find((r) => r.channel)?.channel ?? null)
+
+  // Insert upload audit log (non-blocking — don't fail the request if this errors)
+  getSupabase()
+    .from('upload_logs')
+    .insert({
+      filename: file.name,
+      partner: config.partner,
+      channel: auditChannel,
+      file_date_min: parseResult.minDate.toISOString().slice(0, 10),
+      file_date_max: parseResult.maxDate.toISOString().slice(0, 10),
+      total_rows: rows.length,
+      done: rows.filter((r) => r.status === 'done').length,
+      status_not_success: rows.filter((r) => r.status === 'status_not_success').length,
+      not_in_internal: rows.filter((r) => r.status === 'not_in_internal').length,
+      not_in_partner: rows.filter((r) => r.status === 'not_in_partner').length,
+    })
+    .then(({ error }) => {
+      if (error) console.error('[upload_logs] insert failed:', error.message)
+    })
+
   // Summary counts
   const summary = {
     total: rows.length,
