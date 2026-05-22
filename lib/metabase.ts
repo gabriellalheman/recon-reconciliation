@@ -24,6 +24,12 @@ function fmt(d: Date): string {
   return d.toISOString().slice(0, 19).replace('T', ' ')
 }
 
+function toIsoString(val: unknown): string {
+  if (val == null || val === '') return ''
+  const d = typeof val === 'number' ? new Date(val) : new Date(String(val))
+  return isNaN(d.getTime()) ? '' : d.toISOString()
+}
+
 function buildSnapQuery(start: string, end: string, refColumn: MetabaseRefColumn, acquirerValues: string[]): string {
   const acquirerList = acquirerValues.map((v) => `'${v}'`).join(', ')
 
@@ -186,7 +192,7 @@ export async function fetchMetabaseRows(
       reconRef,
       status: String(row[idxStatus] ?? ''),
       amount: parseFloat(String(row[idxAmount] ?? '0')) || 0,
-      updatedAt: String(row[idxUpdatedAt] ?? ''),
+      updatedAt: toIsoString(row[idxUpdatedAt]),
       clientRefId: idxOriginator >= 0 && row[idxOriginator] != null ? String(row[idxOriginator]) : null,
       merchantId: null,
       merchantName: null,

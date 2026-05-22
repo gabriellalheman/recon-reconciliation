@@ -15,8 +15,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Missing dateFrom or dateTo' }, { status: 400 })
   }
 
-  const utcFrom = new Date(dateFrom + 'T00:00:00.000Z').toISOString()
-  const utcTo = new Date(dateTo + 'T23:59:59.999Z').toISOString()
+  const utcFrom = new Date(dateFrom + 'T00:00:00+07:00').toISOString()
+  const utcTo = new Date(dateTo + 'T23:59:59+07:00').toISOString()
 
   const supabase = getSupabase()
 
