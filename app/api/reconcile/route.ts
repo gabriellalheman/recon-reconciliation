@@ -131,6 +131,7 @@ export async function POST(req: NextRequest) {
     status_not_success: rows.filter((r) => r.status === 'status_not_success').length,
     not_in_internal: rows.filter((r) => r.status === 'not_in_internal').length,
     not_in_partner: rows.filter((r) => r.status === 'not_in_partner').length,
+    internalFetched: internalMap.size,
     parseErrors: parseResult.errors,
     dateRange: {
       min: parseResult.minDate.toISOString().slice(0, 10),
